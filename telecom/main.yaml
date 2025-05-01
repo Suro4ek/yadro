@@ -1,0 +1,79 @@
+---
+- name: Install docker and check scripts
+  hosts: all 
+  become: yes
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: yes
+    - name: Add GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+        state: present
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+    - name: Create "docker" group
+      group:
+        name: "docker"
+        state: present
+    - name: Add remote user to "docker" group
+      user:
+        name: "{{ ansible_ssh_user }}"
+        group: "docker"
+        append: yes
+    - name: Check if container exists
+      command: docker ps -a --filter name=telecom-container --format "{% raw %}{{.Names}}{% endraw %}"
+      register: container_exists
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Run Docker container if not exists
+      docker_container:
+        name: telecom-container
+        image: ghcr.io/suro4ek/yadro:latest
+        state: started
+      when: container_exists.stdout == ""
+  
+    - name: Check container exit code
+      command: docker inspect telecom-container --format {% raw %}'{{.State.ExitCode}}'{% endraw %}
+      register: exit_code
+      until: exit_code.stdout == "0" or exit_code.stdout != ""
+      retries: 10
+      delay: 10
+      changed_when: false
+
+    - name: Check container logs
+      command:
+        cmd: docker logs telecom-container
+      register: container_logs
+      changed_when: false
+
+    - name: Check script success
+      fail:
+        msg: "Script failed, exit code: {{ exit_code.stdout }}"
+      when: exit_code.stdout != "0"
+
+    - name: Show script result
+      debug:
+        var: container_logs.stdout_lines
